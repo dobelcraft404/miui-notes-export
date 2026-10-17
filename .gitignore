@@ -1,0 +1,25 @@
+# 导出结果 —— 里面是真实笔记内容，绝不提交
+dist/
+dist_new/
+导出结果/
+
+# 演示目录里的清单记录了本机绝对路径，不提交
+demo-html/export-manifest.json
+
+# 开发用的真实备份与临时脚本（含私人数据）
+_work/
+*.bak
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 编辑器 / 系统临时文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+# 统一换行，避免 Windows/Linux 协作时整文件 diff
+* text=auto eol=lf
+
+# index.csv 由 csv 模块写出（UTF-8 BOM + CRLF），Excel 才能直接双击打开
+*.csv text eol=crlf
+
+# 启动.bat 是 GBK(cp936) + CRLF 编码的批处理文件，
+# 一旦被当作文本做换行转换就会解析失败，必须原样保留。
+*.bat binary
+
+# 二进制资源，不做任何转换
+*.docx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.pdf binary
+*.hwp binary
+*.entpage binary
+*.bak binary
+*.zip binary

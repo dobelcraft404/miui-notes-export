@@ -1,0 +1,231 @@
+# MIUI 笔记备份导出工具
+
+把**小米澎湃OS / MIUI 的「本地备份」里的笔记包（`.bak`）离线解析**，导出成 Markdown、Word（`.docx`）和 HTML，图片等附件一并保留，输出目录结构与备份包保持一致。
+
+全程本地离线解析，不需要登录小米账号、不联网、不上传任何数据。
+
+## 背景：备份包长什么样
+
+小米「备份」功能生成的压缩包（文件名形如 `<日期>_<时间>.zip`）内含：
+
+```
+小米备份.zip
+├── descript.xml                 备份描述（设备型号、系统版本、包名等）
+└── 笔记(com.miui.notes).bak     该应用的备份数据
+```
+
+`.bak` 本体是一个纯文本头 + **标准 POSIX tar 归档**：
+
+```
+MIUI BACKUP\n
+2\n                            <- 容器版本
+com.miui.notes 笔记\n           <- 包名 + 应用名
+-1\n0\n
+ANDROID BACKUP\n5\n0\nnone\n   <- 子系统版本、加密标志、算法
+<tar 归档从这里开始>
+```
+
+tar 内部与本工具相关的条目：
+
+| 条目 | 内容 |
+| --- | --- |
+| `apps/com.miui.notes/miui_bak/_tmp_bak` | 笔记正文（protobuf 编码） |
+| `apps/com.miui.notes/miui_att/*` | 图片、手写笔迹、识别结果等附件 |
+| `apps/com.miui.notes/_meta` | 桌面小组件偏好（与正文无关） |
+`_tmp_bak` 内部是 protobuf：顶层 `#6` 里逐条存放「目录」和「笔记」记录，每条笔记含 ID、创建/修改时间、标题、所属目录、正文项（`#9`）以及手写笔记的额外字段（`#16`~`#21`）。
+
+正文不是标准 HTML，而是小米自定义的行内标记：
+
+```
+<text indent="1">正文<b>加粗</b><br>第二行</text>
+<input type="checkbox" indent="1" level="3" checked="true" />
+☺ <40位十六进制hash><0/></>          <- 行内图片，hash 即附件文件名
+```
+
+## 安装
+
+要求 **Python 3.9+**。完整功能在 Python 3.11 上开发并验证；Python 3.13.1 上实测 Markdown 导出正常（该解释器下没装 `python-docx`，所以 Word 导出未在 3.13 上验证）。
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+- 只导出 Markdown 时**无需任何第三方库**（仅用标准库）。
+- 导出 Word 需要 `python-docx`（`requirements.txt` 里已列出）。
+- HTML 只需要标准库。
+
+## 使用
+
+### 图形界面（推荐）
+
+双击本目录下的 **`启动.bat`**（或执行 `python main.py`）：
+
+- 在界面里**手动选择备份包**（`.zip` 或 `.bak`）和输出目录；
+- 勾选要导出的格式（Markdown / Word / HTML）；
+- 选「**与已有文档合并**」或「不合并」（见下面的「重复内容怎么处理」）；
+- 点「开始导出」，导出在后台线程里跑，窗口不会卡住；
+- 完成后可以一键打开输出目录或 `index.html` 目录页。
+
+`启动.bat` 会自动找 Python（优先 `%LOCALAPPDATA%\Programs\Python\Python311`，其次 `Python312/313`、`python`、`py`）。
+
+### 命令行
+
+在 **本目录下**执行（未安装成包，`python -m miui_notes_bak` 需要能 import 到这个目录）。最简单的情况下，直接把压缩包或 `.bak` 丢给它：
+
+```powershell
+# 直接吃小米备份 zip（自动在临时目录解出 .bak）
+python -m miui_notes_bak "小米备份.zip" -o .\dist
+
+# 也可以用已经解出来的 .bak
+python -m miui_notes_bak ".\备份\笔记(com.miui.notes).bak" -o .\dist
+
+# 三种格式都要（Markdown + Word + HTML，并生成 index.html 目录页）
+python -m miui_notes_bak "小米备份.zip" -o .\dist -f all
+
+# 只要 Markdown（零第三方依赖）
+python -m miui_notes_bak "小米备份.zip" -o .\dist -f md
+
+# 只要能在浏览器里翻阅的 HTML
+python -m miui_notes_bak "小米备份.zip" -o .\dist -f html
+
+# 关闭合并：即使内容一模一样，也在输出目录里再写一份
+python -m miui_notes_bak "小米备份.zip" -o .\dist -f all --no-merge
+
+# 给一个「没有清单的老导出目录」补清单与目录页（不重新导出笔记）
+python -m miui_notes_bak "小米备份.zip" -o .\dist --rebuild-index
+
+# 额外把附件原样再存一份，并列出没被任何笔记引用的附件
+python -m miui_notes_bak "小米备份.zip" -o .\dist --keep-raw --copy-unreferenced
+```
+
+参数一览：
+
+| 参数 | 说明 |
+| --- | --- |
+| `source` | 备份 zip、`.bak` 文件，或包含它们的目录 |
+| `-o, --out` | 输出目录，默认 `notes-export` |
+| `-f, --format` | `md` / `docx` / `html` / `both`(=md+docx，默认) / `all`(三种都要) |
+| `--merge` / `--no-merge` | 是否与输出目录里已有的笔记合并（默认 `--merge`） |
+| `--rebuild-index` | 只重建清单与目录页，不重新导出笔记 |
+| `--keep-raw` | 另存一份原始附件到 `raw_attachments/` |
+| `--copy-unreferenced` | 把没被引用到的附件放进 `raw_attachments/unreferenced/` |
+| `--workdir` | 解压 zip 的临时目录 |
+| `--no-index` | 不生成 `index.csv` / `index.html` |
+
+### 重复内容怎么处理
+
+同一个备份包反复导出、或者两次备份里有同一篇笔记时，默认**不会**产生第二份文件：
+
+- 每篇笔记会算一枚**内容指纹**（`ID + 正文 + 全部关联附件的内容哈希`，刻意不含时间、标题和目录），落盘在输出目录的 `export-manifest.json` 里；
+- 导出时先查清单：**内容指纹一致且 `note.md`/`note.docx`/`note.html` 都在磁盘上**，就直接跳过（终端会打印 `合并：N 篇内容与已有文件完全相同`），目录页仍然收录这篇笔记；
+- 只改了标题或时间（内容没变）也算同一篇，沿用原来的目录，不会多出「标题 (2)」；
+- 内容真的变了（正文或附件改了），会在**原地覆盖**那一篇，不新增目录；
+- 清单可以随时删掉：删了只是让下次重新导出，不会丢笔记；老目录（清单丢失、或备份里的标题改过）在合并模式与 `--rebuild-index` 下会**按 `note.md` 正文认领**原目录。
+
+## 输出结构
+
+结构和备份包一致：**目录→笔记**两级，每篇笔记一个文件夹，自己的附件放在自己的 `note.assets/` 里。
+
+```
+dist/
+├── index.html                            目录页：按目录分组列全部笔记，带搜索框，双击即可浏览
+├── index.csv                             全部笔记的清单（utf-8-sig，Excel 可直接打开）
+├── export-manifest.json                  「合并去重」用的清单：每篇笔记的内容指纹与落点
+├── 日记（暂定）/                          备份里的目录名，原名保留
+│   ├── 2026-09-03/                        笔记名（标题→摘要→未命名笔记）
+│   │   ├── note.md                       正文（图片按相对路径引用 note.assets/）
+│   │   ├── note.html                     单篇笔记的网页版（图片同样是相对引用）
+│   │   ├── note.docx                     Word 版，图片已内嵌
+│   │   └── note.assets/
+│   │       ├── 32cbc4587467a266977f5eeeb291bb99132aff16.png
+│   │       └── 1e42b214....jpg
+│   └── ...
+├── 游戏相关/
+│   └── ...
+└── 未分类/                               没有归入任何目录的笔记
+    └── ...
+```
+
+用 `-f html` 或 `-f all` 时会生成 HTML；`index.html` 是纯静态页面（内联 CSS 和一个原生 JS 搜索框），**离线可开、可以整个目录打包带走**，也能直接扔进任何静态站点或网盘。图片是相对路径引用 `note.assets/`，所以移动整个 `dist/` 不会断链。
+
+说明：
+
+- 附件原文件名是**内容的 SHA1**，没有扩展名。工具按魔数识别真实类型并补上扩展名（图片 `.png` / `.jpg`、识别结果 `.json`、手写笔迹 `.hwp`、多页手写 `.entpage`），文件内容一个字节都不改。
+- `note.assets/` 里除了图片，还会有笔记引用的非图片文件（手写笔迹 `.ent`、识别结果 `.json`）。它们没法在正文里显示，但都完整保留，`note.md` 末尾会逐条列出。
+- 手写笔记：正文为空，工具会把笔迹缩略图插到正文位置；原始笔迹文件 `HWPENKITDATA` / 多页 `ENTPAGEINFO` 属于小米私有格式，**无法解码成通用图片**，按原样保留在 `note.assets/` 里。
+- 文件名中的非法字符（`< > : " / \ | ? *`）会被替换，过长会截断。
+
+## 作为库使用
+
+```python
+from miui_notes_bak import MiuiBackup, load_notes
+from miui_notes_bak import content, attachments
+
+with MiuiBackup(r'.\备份\笔记(com.miui.notes).bak') as bak:
+    notes, raw = load_notes(bak)          # 目录记录 + 笔记记录
+    atts = bak.attachments()              # {相对路径: bytes}，全部附件
+    for note in notes:
+        if note.is_folder:
+            print('目录:', note.title)
+            continue
+        doc = content.parse_content(note.content, list(atts))
+        refs = attachments.collect_refs(note, doc, attachments.Resolver(sorted(atts)), raw)
+        print(note.note_id, note.display_title, len(doc.blocks), len(refs))
+```
+
+`export.py` 里的三个渲染函数都以同一份块列表（`content.NoteDocument`）为输入：
+`note_markdown()` / `note_html()` / `note_docx()`，另外 `write_index_html()` 生成目录页。
+
+## 自检
+
+```powershell
+# 纯合成数据的回归测试（秒级，不依赖备份文件）：正文解析边界 + 合成备份端到端导出
+python tests\test_parse_content.py
+
+# 合并去重语义（纯合成数据，秒级）：重复导出不产生第二份、改标题沿用原目录、重建清单
+python tests\test_manifest.py
+
+# 真实备份上的端到端断言（只读备份，输出到临时目录，跑完删除；不打印任何笔记正文）
+python tests\test_export.py "小米备份.zip"
+```
+
+`test_export.py` 覆盖：容器与 protobuf 解析、正文标记剥离、附件类型识别、全量导出篇数、Markdown 图片链接有效性、HTML 结构与引用完整性、Word 可打开且内嵌图片数与 Markdown 一致、`index.html` 链接有效。`test_manifest.py` 覆盖合并去重的全部语义。三个脚本退出码 0 表示全部通过。
+
+> `test_export.py` 只断言「结构不变量」（各种格式的篇数互相对得上、链接都有效、图片数三处一致），**不写死任何一份备份的具体数字**，所以换一台手机、换一份备份也能用。没有提供备份时它会打印「跳过」并返回 0，不会让整个测试套件变红。
+
+另外两个**针对导出结果**的自检脚本（纯标准库，不依赖浏览器）：
+
+```powershell
+# HTML：doctype / utf-8 声明 / 标签闭合 / 每个 src、href 目标是否存在
+python tools\html_check.py .\dist
+
+# Markdown：note.assets 里的文件是否都被 md 提到；md 与 docx 是否配对
+python tools\verify_export.py .\dist
+```
+
+两个脚本默认只打印汇总（导出目录里会有私人笔记标题，逐页输出不适合贴给别人），加 `-v` 才逐页列出。
+
+> `test_export.py` 可以直接吃备份 zip：内部会先解出 `.bak`，并且**必须等全部步骤跑完才清理临时目录**（早期版本在第 1 步就把它删了，导致第 4 步 `FileNotFoundError: ...\backup.bak`，只在传 zip 时复现）。
+
+`tests\make_synthetic_bak.py` 可以单独运行，在当前目录生成一份**不含任何真实数据**的最小备份，用来快速验证整条链路：
+
+```powershell
+python tests\make_synthetic_bak.py
+python -m miui_notes_bak tests\synthetic.bak -o .\dist-synthetic
+```
+
+仓库里的 `demo-html/` 就是用上面这份合成数据生成的示例（完全不含真实笔记），双击 `demo-html\index.html` 可以直接看到导出效果。
+
+## 常见问题
+
+**导出的 Word 里没有图片？**
+检查 `note.assets/` 是否有文件；`note.md` 的图片链接与 `note.docx` 的内嵌图片在测试里是逐一比对的，二者数量应当一致。
+
+**手写笔记只有一张图？**
+这是正常的。手写笔迹保存在小米私有的 `.ent`（`HWPENKITDATA`）里，只有 app 自己能渲染，导出的是备份里同时存下的缩略图。
+
+**能导出其他应用的备份吗？**
+不能。`_tmp_bak` 的 protobuf 结构是「笔记」这个应用自己的，本工具只针对 `com.miui.notes`。
+
+**数据安全？**
+解析与导出全在本机完成，不发起任何网络请求，不修改原始备份文件。

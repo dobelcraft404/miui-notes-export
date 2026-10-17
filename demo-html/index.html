@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小米笔记导出</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 2rem 1rem 4rem;
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  font-size: 15px; line-height: 1.75; color: #24292f; background: #f6f8fa;
+}
+.page { max-width: 46rem; margin: 0 auto; background: #fff; border-radius: 10px;
+        padding: 2rem 2.25rem 2.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+h1 { font-size: 1.5rem; margin: 0 0 .6rem; line-height: 1.4; }
+.meta { color: #6a737d; font-size: .82rem; margin: 0 0 1.6rem;
+        padding-bottom: .9rem; border-bottom: 1px solid #eaecef; }
+.meta span + span::before { content: " · "; }
+p { margin: .55rem 0; }
+p.indent-1 { margin-left: 1.4rem; }
+p.indent-2 { margin-left: 2.8rem; }
+p.indent-3 { margin-left: 4.2rem; }
+.todo { list-style: none; padding-left: 0; margin: .4rem 0; }
+.todo li { margin: .25rem 0; }
+.todo input { margin-right: .5rem; vertical-align: -1px; }
+figure { margin: 1rem 0; }
+figure img { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #eaecef; }
+figcaption { color: #8b949e; font-size: .75rem; margin-top: .35rem; word-break: break-all; }
+.attachments { margin-top: 2rem; padding-top: .9rem; border-top: 1px dashed #d8dee4;
+               color: #57606a; font-size: .84rem; }
+.attachments h2 { font-size: .95rem; margin: 0 0 .5rem; color: #24292f; }
+.attachments ul { margin: 0; padding-left: 1.2rem; }
+.attachments code { word-break: break-all; }
+a { color: #0969da; }
+.index-list { list-style: none; padding: 0; margin: 0; }
+.index-list li { padding: .6rem 0; border-bottom: 1px solid #eaecef; }
+.index-list li:last-child { border-bottom: 0; }
+.index-list .title { font-weight: 600; }
+.index-list .sub { color: #6a737d; font-size: .8rem; }
+.index-list .links a + a::before { content: " | "; color: #d0d7de; }
+.group h2 { font-size: 1.05rem; margin: 1.8rem 0 .4rem; padding-bottom: .3rem;
+            border-bottom: 2px solid #eaecef; }
+#q { width: 100%; padding: .55rem .8rem; font-size: .95rem; margin: .2rem 0 1.2rem;
+     border: 1px solid #d0d7de; border-radius: 6px; font-family: inherit; }
+@media (prefers-color-scheme: dark) {
+  body { background: #0d1117; color: #c9d1d9; }
+  .page { background: #161b22; box-shadow: none; }
+  .meta, .index-list .sub, figcaption { color: #8b949e; }
+  .meta, .index-list li, .group h2 { border-color: #30363d; }
+  .attachments { border-color: #30363d; color: #8b949e; }
+  .attachments h2 { color: #c9d1d9; }
+  #q { background: #0d1117; color: #c9d1d9; border-color: #30363d; }
+  a { color: #58a6ff; }
+  figure img { border-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+<h1>小米笔记导出</h1>
+<p class="meta"><span>共 4 篇笔记</span><span>2 个目录</span></p>
+<input id="q" type="search" placeholder="输入关键词过滤标题 / 目录…" autocomplete="off">
+<div class="group"><h2>未分类</h2><ul class="index-list">
+<li data-text="未分类 手写笔记"><span class="title">手写笔记</span> <span class="links"><a href="未分类/手写笔记/note.md">MD</a><a href="未分类/手写笔记/note.docx">DOCX</a><a href="未分类/手写笔记/note.html">HTML</a></span><br><span class="sub">创建 2023-11-15 06:13:26 · handwrite · 1 图 / 3 附件</span></li>
+<li data-text="未分类 笔记-3"><span class="title">笔记-3</span> <span class="links"><a href="未分类/未命名笔记/note.md">MD</a><a href="未分类/未命名笔记/note.docx">DOCX</a><a href="未分类/未命名笔记/note.html">HTML</a></span><br><span class="sub">创建 2023-11-15 06:13:24 · 0 图 / 0 附件</span></li>
+</ul></div>
+<div class="group"><h2>测试目录</h2><ul class="index-list">
+<li data-text="测试目录 图片笔记"><span class="title">图片笔记</span> <span class="links"><a href="测试目录/图片笔记/note.md">MD</a><a href="测试目录/图片笔记/note.docx">DOCX</a><a href="测试目录/图片笔记/note.html">HTML</a></span><br><span class="sub">创建 2023-11-15 06:13:22 · 1 图 / 1 附件</span></li>
+<li data-text="测试目录 文本笔记"><span class="title">文本笔记</span> <span class="links"><a href="测试目录/文本笔记/note.md">MD</a><a href="测试目录/文本笔记/note.docx">DOCX</a><a href="测试目录/文本笔记/note.html">HTML</a></span><br><span class="sub">创建 2023-11-15 06:13:20 · 0 图 / 0 附件</span></li>
+</ul></div>
+</div>
+<script>
+(function () {
+  var q = document.getElementById('q');
+  var items = [].slice.call(document.querySelectorAll('.index-list li'));
+  var groups = [].slice.call(document.querySelectorAll('.group'));
+  q.addEventListener('input', function () {
+    var needle = q.value.trim().toLowerCase();
+    items.forEach(function (li) {
+      li.style.display = !needle ||
+        (li.getAttribute('data-text') || '').toLowerCase().indexOf(needle) >= 0 ? '' : 'none';
+    });
+    groups.forEach(function (g) {
+      var any = [].slice.call(g.querySelectorAll('.index-list li'))
+        .some(function (li) { return li.style.display !== 'none'; });
+      g.style.display = any ? '' : 'none';
+    });
+  });
+})();
+</script>
+</body>
+</html>
