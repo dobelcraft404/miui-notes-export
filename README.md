@@ -68,6 +68,8 @@ python -m pip install -r requirements.txt
 
 `启动.bat` 会自动找 Python（优先 `%LOCALAPPDATA%\Programs\Python\Python311`，其次 `Python312/313`、`python`、`py`）。
 
+> `启动.bat` 是 **GBK(cp936) + CRLF** 编码的批处理文件，这是为了让中文 Windows 的 `cmd` 能正确解析路径与提示语。由于 GitHub 按 UTF-8 显示文本，**在网页上直接点开这个文件会看到乱码，属于正常现象**；下载到本地双击运行不受影响。
+
 ### 命令行
 
 在 **本目录下**执行（未安装成包，`python -m miui_notes_bak` 需要能 import 到这个目录）。最简单的情况下，直接把压缩包或 `.bak` 丢给它：
