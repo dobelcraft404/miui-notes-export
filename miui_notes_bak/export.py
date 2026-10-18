@@ -93,7 +93,7 @@ def note_markdown(note: Note, doc: NoteDocument, image_links: Dict[str, str],
         text = ''.join(
             ('**%s**' % _escape(s.text)) if s.bold else
             ('*%s*' % _escape(s.text)) if s.italic else
-            ('<u>%s</u>' % _escape(s.text)) if s.underline else _escape(s.text)
+            _escape(s.text)
             for s in block.spans
         )
         if block.checkbox is not None:

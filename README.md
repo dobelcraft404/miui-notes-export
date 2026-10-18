@@ -55,6 +55,7 @@ python -m pip install -r requirements.txt
 - 只导出 Markdown 时**无需任何第三方库**（仅用标准库）。
 - 导出 Word 需要 `python-docx`（`requirements.txt` 里已列出）。
 - HTML 只需要标准库。
+- 装了 `python-docx` 与否都不影响启动：同时勾了 Markdown / Word 而机器上没装 `python-docx` 时，会打印一行提示后**跳过 Word**、其余格式照常导出；只勾 Word 才会报错让你装依赖。
 
 ## 使用
 
@@ -92,6 +93,9 @@ python -m miui_notes_bak "小米备份.zip" -o .\dist -f md
 # 只要能在浏览器里翻阅的 HTML
 python -m miui_notes_bak "小米备份.zip" -o .\dist -f html
 
+# 只要 Markdown + HTML（逗号分隔，跳过 Word 就不需要 python-docx）
+python -m miui_notes_bak "小米备份.zip" -o .\dist -f md,html
+
 # 关闭合并：即使内容一模一样，也在输出目录里再写一份
 python -m miui_notes_bak "小米备份.zip" -o .\dist -f all --no-merge
 
@@ -108,7 +112,7 @@ python -m miui_notes_bak "小米备份.zip" -o .\dist --keep-raw --copy-unrefere
 | --- | --- |
 | `source` | 备份 zip、`.bak` 文件，或包含它们的目录 |
 | `-o, --out` | 输出目录，默认 `notes-export` |
-| `-f, --format` | `md` / `docx` / `html` / `both`(=md+docx，默认) / `all`(三种都要) |
+| `-f, --format` | `md` / `docx` / `html` / `both`(=md+docx，默认) / `all`(三种都要)；也可用逗号组合，如 `md,html` |
 | `--merge` / `--no-merge` | 是否与输出目录里已有的笔记合并（默认 `--merge`） |
 | `--rebuild-index` | 只重建清单与目录页，不重新导出笔记 |
 | `--keep-raw` | 另存一份原始附件到 `raw_attachments/` |
@@ -125,6 +129,23 @@ python -m miui_notes_bak "小米备份.zip" -o .\dist --keep-raw --copy-unrefere
 - 只改了标题或时间（内容没变）也算同一篇，沿用原来的目录，不会多出「标题 (2)」；
 - 内容真的变了（正文或附件改了），会在**原地覆盖**那一篇，不新增目录；
 - 清单可以随时删掉：删了只是让下次重新导出，不会丢笔记；老目录（清单丢失、或备份里的标题改过）在合并模式与 `--rebuild-index` 下会**按 `note.md` 正文认领**原目录。
+
+## 兼容性
+
+备份格式没有公开文档，不同系统版本、不同机型之间会有些细微差别。工具在这些地方**不写死**，尽量按结构特征去认：
+
+| 可能变化的点 | 工具怎么处理 |
+| --- | --- |
+| 备份包里同时有很多应用 | 在 zip / 目录里找出全部 `.bak`，读文本头里的包名，只挑 `com.miui.notes`；找不到时明确报错并列出候选，不会拿别的应用的数据瞎解 |
+| 文本头行数、字段略有不同 | 不按固定字节数切，而是逐行读、读到 `none` / `password` / `raw` 这类收尾标记为止；tar 起点靠扫 `ustar` 魔数 + 校验和定位 |
+| 记录的 protobuf 字段号变了 | 容器字段不假设一定是 `#6`，而是找「装着目录/笔记记录」的那个字段；正文项也不假设一定是 `#9`，先按内部 `#1` 是不是 MIME 字符串来识别，认不出才回退 `#9` |
+| 某条记录缺 ID 或时间戳 | 时间戳回退用正文项的字段并且只接受毫秒级（`>10**12`）；ID 缺失时用正文里的短数字串、再不行用记录偏移生成一个，保证不串篇 |
+| 出现不认识的字段 | 不认识但是字符串/内嵌消息的字段收进 `note.extra`，不会让整条解析失败 |
+| 备份被加密了 | 文本头里的加密标志非 `0` 时直接给出中文提示——本工具只做离线解析，不支持密码解密 |
+| 机器上没装 `python-docx` | 跳过 Word、其余格式照常导出（只勾 Word 时才报错） |
+| 正文里的下划线 | Markdown 没有下划线语法，所以 **Markdown 里只保留文字、不加任何 HTML 标签**；HTML 和 Word 里下划线样式照旧保留 |
+
+需要说明的是：以上兼容性是在**一份**澎湃OS3 真实备份（笔记 `2.4.0.9`）上验证的，其余变体是用合成备份模拟的。如果你的机型和系统版本导出后有问题，把终端里的报错信息提出来即可定位——解析层对不认识的字段是宽容的，通常是某个字段的位置需要补一条规则。
 
 ## 输出结构
 
@@ -189,11 +210,14 @@ python tests\test_parse_content.py
 # 合并去重语义（纯合成数据，秒级）：重复导出不产生第二份、改标题沿用原目录、重建清单
 python tests\test_manifest.py
 
+# 兼容性（纯合成数据，秒级）：字段号变体 / 头部变体 / 多应用备份包 / 加密备份 / 缺 python-docx
+python tests\test_compat.py
+
 # 真实备份上的端到端断言（只读备份，输出到临时目录，跑完删除；不打印任何笔记正文）
 python tests\test_export.py "小米备份.zip"
 ```
 
-`test_export.py` 覆盖：容器与 protobuf 解析、正文标记剥离、附件类型识别、全量导出篇数、Markdown 图片链接有效性、HTML 结构与引用完整性、Word 可打开且内嵌图片数与 Markdown 一致、`index.html` 链接有效。`test_manifest.py` 覆盖合并去重的全部语义。三个脚本退出码 0 表示全部通过。
+`test_export.py` 覆盖：容器与 protobuf 解析、正文标记剥离、附件类型识别、全量导出篇数、Markdown 图片链接有效性、HTML 结构与引用完整性、Word 可打开且内嵌图片数与 Markdown 一致、`index.html` 链接有效。`test_manifest.py` 覆盖合并去重的全部语义，`test_compat.py` 覆盖格式变体与容错（全部用合成数据，不需要真实备份）。四个脚本退出码 0 表示全部通过。
 
 > `test_export.py` 只断言「结构不变量」（各种格式的篇数互相对得上、链接都有效、图片数三处一致），**不写死任何一份备份的具体数字**，所以换一台手机、换一份备份也能用。没有提供备份时它会打印「跳过」并返回 0，不会让整个测试套件变红。
 

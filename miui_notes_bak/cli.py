@@ -28,28 +28,68 @@ FORMAT_FILE = {'md': 'note.md', 'docx': 'note.docx', 'html': 'note.html'}
 # 输入准备：.bak 或 包含 .bak 的 zip 备份包
 # ---------------------------------------------------------------------------
 
+def _bak_package(path: str) -> str:
+    """只读文件头判断这个 .bak 属于哪个应用；读不出来返回空串。"""
+    try:
+        with open(path, 'rb') as fh:
+            head = fh.read(65536)
+        lines, _offset = bakfile.read_header(head)
+    except (OSError, bakfile.BackupFormatError):
+        return ''
+    for line in lines:
+        token = line.split(' ', 1)[0].strip().lower()
+        if token.count('.') >= 1 and token.startswith(('com.', 'org.', 'net.', 'cn.', 'io.')):
+            return token
+    return ''
+
+
+def _pick_bak(paths: Sequence[str], source: str) -> str:
+    """从若干 .bak 里挑出笔记备份（zip 备份包通常包含多个应用）。"""
+    seen = []
+    unknown = []
+    for path in paths:
+        package = _bak_package(path)
+        if package == bakfile.PACKAGE:
+            return path
+        if package:
+            seen.append('%s（%s）' % (os.path.basename(path), package))
+        else:
+            unknown.append(path)
+    if len(paths) == 1 and unknown:
+        # 只有一个 .bak 且读不出包名：试着解析，后面会给出更具体的错误
+        return paths[0]
+    raise SystemExit('备份包里没有小米笔记（%s）。候选：%s'
+                     % (bakfile.PACKAGE, '、'.join(seen) or '、'.join(
+                         os.path.basename(p) for p in paths)))
+
+
 def prepare_input(source: str, workdir: Optional[str] = None) -> Tuple[str, Optional[str]]:
-    """返回 (bak 路径, 需要清理的临时目录)。"""
+    """返回 (bak 路径, 需要清理的临时目录)。
+
+    支持三种输入：单个 .bak、含一个或多个 .bak 的 zip 备份包、含 .bak 的目录。
+    zip 里通常同时有多个应用的备份，这里按头部包名挑出笔记那一个。
+    """
     if os.path.isdir(source):
-        cands = [f for f in sorted(os.listdir(source)) if f.lower().endswith(BAK_SUFFIX)]
+        cands = [os.path.join(source, f) for f in sorted(os.listdir(source))
+                 if f.lower().endswith(BAK_SUFFIX)]
         if not cands:
             raise SystemExit('目录里没有找到 .bak 文件：%s' % source)
-        return os.path.join(source, cands[0]), None
+        return _pick_bak(cands, source), None
 
     if source.lower().endswith('.zip'):
         tmp = workdir or tempfile.mkdtemp(prefix='miui-notes-')
         with zipfile.ZipFile(source) as zf:
-            target = None
-            for info in zf.infolist():
-                if info.filename.lower().endswith(BAK_SUFFIX):
-                    target = info
-                    break
-            if target is None:
+            infos = [i for i in zf.infolist() if i.filename.lower().endswith(BAK_SUFFIX)]
+            if not infos:
                 raise SystemExit('zip 里没有找到 .bak：%s' % source)
-            out = os.path.join(tmp, 'backup.bak')
-            with zf.open(target) as src, open(out, 'wb') as dst:
-                shutil.copyfileobj(src, dst)
-            return out, tmp
+            extracted: List[str] = []
+            for idx, info in enumerate(infos):
+                name = os.path.basename(info.filename.replace('\\', '/')) or 'backup.bak'
+                out = os.path.join(tmp, '%02d_%s' % (idx, name))
+                with zf.open(info) as src, open(out, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                extracted.append(out)
+            return _pick_bak(extracted, source), tmp
     return source, None
 
 
@@ -326,10 +366,36 @@ class Exporter:
         return list(self._rows_by_path.values())
 
     # -- 全部导出 -------------------------------------------------------
+    def _check_formats(self) -> None:
+        """按运行环境调整格式：没装 python-docx 时能出什么出什么，而不是直接崩掉。"""
+        if 'docx' not in self.formats:
+            return
+        try:
+            import docx  # noqa: F401
+            return
+        except Exception:
+            pass
+        rest = [f for f in self.formats if f != 'docx']
+        if not rest:
+            raise SystemExit('需要 Word 格式，但没有安装 python-docx。\n'
+                             '  安装：pip install python-docx\n'
+                             '  或者改用：-f md / -f html / -f md,html')
+        print('提示：没有安装 python-docx，本次跳过 Word 导出，其余格式照常。\n'
+              '      需要 .docx 请先执行：pip install python-docx')
+        self.formats = rest
+
     def run(self, bak_path: str) -> dict:
-        with bakfile.MiuiBackup(bak_path) as backup:
-            notes, raw = bakfile.load_notes(backup)
-            attachments = backup.attachments()
+        self._check_formats()
+        try:
+            with bakfile.MiuiBackup(bak_path) as backup:
+                if backup.encrypted:
+                    raise SystemExit('这个备份是加密的（头部加密标志为 1），本工具无法离线解析。'
+                                     '请在手机上备份时不设密码，或先解密再试。')
+                notes, raw = bakfile.load_notes(backup)
+                attachments = backup.attachments()
+        except bakfile.BackupFormatError as exc:
+            raise SystemExit('无法解析这个备份：%s\n'
+                             '请确认选的是「笔记」应用的备份（com.miui.notes）。' % exc)
 
         resolver = att_mod.Resolver(sorted(attachments))
         self.stat['folders'] = sum(1 for n in notes if n.is_folder)
@@ -536,8 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('source', help='备份包 .zip 或 .bak（也接受含 .bak 的目录）')
     p.add_argument('-o', '--out', default='notes-export', help='输出目录（默认 notes-export）')
     p.add_argument('-f', '--format', default='both',
-                   choices=['md', 'docx', 'html', 'both', 'all'],
-                   help='导出格式：md / docx / html / both(=md+docx，默认) / all(三种都要)')
+                   help='导出格式：md / docx / html，可用逗号组合（如 md,html）；'
+                        'both=md+docx（默认），all=三种都要')
     p.add_argument('--keep-raw', action='store_true',
                    help='额外原样释放全部 miui_att 附件（含无法解析的手写笔迹）')
     p.add_argument('--copy-unreferenced', action='store_true',
@@ -553,10 +619,32 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+FORMAT_ALIASES = {'both': ['md', 'docx'], 'all': ['md', 'docx', 'html']}
+VALID_FORMATS = ('md', 'docx', 'html')
+
+
+def parse_formats(value: str) -> List[str]:
+    """把 `-f` 的值解析成格式列表，支持 md,html 这种逗号组合。"""
+    key = (value or '').strip().lower()
+    if key in FORMAT_ALIASES:
+        return list(FORMAT_ALIASES[key])
+    out: List[str] = []
+    for part in key.replace('，', ',').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if part not in VALID_FORMATS:
+            raise SystemExit('不认识的格式：%s（可选 md / docx / html，也可用 both / all）' % part)
+        if part not in out:
+            out.append(part)
+    if not out:
+        raise SystemExit('-f 至少要指定一种格式（md / docx / html）')
+    return out
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    formats = {'both': ['md', 'docx'], 'all': ['md', 'docx', 'html']}.get(
-        args.format, [args.format])
+    formats = parse_formats(args.format)
     source = os.path.abspath(args.source)
     if not os.path.exists(source):
         print('找不到输入：%s' % source, file=sys.stderr)

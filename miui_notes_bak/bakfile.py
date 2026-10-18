@@ -67,24 +67,67 @@ class BackupFormatError(Exception):
     """备份文件不符合预期格式。"""
 
 
+def _valid_tar_header(block: bytes) -> bool:
+    """校验 512 字节块是否像合法的 tar 头（大小与校验和）。"""
+    if len(block) < 512:
+        return False
+    try:
+        chksum = int(block[148:156].split(b'\x00')[0].strip() or b'0', 8)
+    except ValueError:
+        return False
+    if not chksum:
+        return False
+    unsigned = sum(block[:148]) + 8 * 0x20 + sum(block[156:])
+    signed = (sum(b if b < 128 else b - 256 for b in block[:148]) + 8 * 0x20 +
+              sum(b if b < 128 else b - 256 for b in block[156:]))
+    return chksum in (unsigned, signed)
+
+
+def _find_tar_offset(data: bytes) -> int:
+    """定位 tar 归档起点，不依赖文本头的字段个数。
+
+    tar 头的 257 处是 'ustar'，但正文里也可能出现这个字符串，所以再用校验和
+    验证一次，避免在错误偏移上打开归档。找不到返回 -1。
+    """
+    pos = data.find(b'ustar', 100)
+    while pos > 0:
+        start = pos - 257
+        if start > 0 and _valid_tar_header(data[start:start + 512]):
+            return start
+        pos = data.find(b'ustar', pos + 1)
+    return -1
+
+
 def read_header(data: bytes) -> Tuple[List[str], int]:
-    """解析 MIUI BACKUP 文本头，返回（各字段, tar 起始偏移）。"""
+    """解析 MIUI BACKUP 文本头，返回（各字段, tar 起始偏移）。
+
+    兼容不同版本：不假设头部正好几个字段，而是读到无法再按 UTF-8 解码、或读到
+    加密算法行（none / password / raw）为止；tar 起点则用 `_find_tar_offset`
+    独立定位。
+    """
     if not data.startswith(MAGIC):
         raise BackupFormatError('不是 MIUI BACKUP 文件（缺少 magic）')
-    end = data.find(b'\n', len(MAGIC))
-    if end < 0:
-        raise BackupFormatError('头部不完整')
     lines: List[str] = []
     pos = 0
-    while True:
+    limit = min(len(data), 65536)
+    while pos < limit:
         nxt = data.find(b'\n', pos)
-        if nxt < 0:
-            raise BackupFormatError('头部缺少结尾换行')
-        lines.append(data[pos:nxt].decode('utf-8'))
-        pos = nxt + 1
-        if len(lines) >= 4 and lines[-1] in ('none', 'password', 'raw'):
+        if nxt < 0 or nxt > limit:
             break
-    return lines, pos
+        try:
+            line = data[pos:nxt].decode('utf-8')
+        except UnicodeDecodeError:
+            break
+        lines.append(line)
+        pos = nxt + 1
+        if line in ('none', 'password', 'raw') and len(lines) >= 3:
+            break
+    if len(lines) < 3:
+        raise BackupFormatError('头部不完整（只有 %d 行）' % len(lines))
+    tar_offset = _find_tar_offset(data)
+    if tar_offset < 0:
+        raise BackupFormatError('头部之后没有找到 tar 归档')
+    return lines, tar_offset
 
 
 class MiuiBackup:
@@ -95,22 +138,91 @@ class MiuiBackup:
             self._data = fh.read()
         self.header_lines, self.tar_offset = read_header(self._data)
         self._tar = tarfile.open(fileobj=io.BytesIO(self._data[self.tar_offset:]), mode='r:')
-        self._members = {m.name: m for m in self._tar.getmembers()}
+        self._members = {m.name: m for m in self._tar.getmembers() if m.isfile()}
+        self._root: Optional[str] = None
+        self._att_prefix_cache: Optional[str] = None
 
     # -- 元信息 ---------------------------------------------------------
     @property
     def package(self) -> str:
-        return self.header_lines[2].split(' ', 1)[0] if len(self.header_lines) > 2 else ''
+        """备份的应用包名（从头部第 3 行等位置推断，兼容头部字段数变化）。"""
+        for line in self.header_lines:
+            tok = line.split(' ', 1)[0].strip()
+            low = tok.lower()
+            if tok.count('.') >= 1 and low.startswith(('com.', 'org.', 'net.', 'cn.', 'io.')):
+                return tok
+        return PACKAGE
+
+    @property
+    def encrypted(self) -> bool:
+        """头部里的加密标志是否为 1（加密备份无法离线解析）。"""
+        try:
+            idx = self.header_lines.index('ANDROID BACKUP')
+        except ValueError:
+            return False
+        rest = self.header_lines[idx + 1:]
+        if len(rest) < 2:
+            return False
+        return rest[1].strip() not in ('0', '')
+
+    def _app_root(self) -> str:
+        if self._root is None:
+            self._root = 'apps/%s/' % self.package
+        return self._root
 
     def names(self) -> List[str]:
         return list(self._members)
 
+    def _find_entry(self, wanted: str) -> str:
+        """定位 _tmp_bak 之类的关键条目，允许包名/目录名变化。"""
+        for cand in (self._app_root() + wanted, NOTE_ROOT + wanted):
+            if cand in self._members:
+                return cand
+        tail = '/' + wanted
+        for name in self._members:
+            if name.endswith(tail):
+                return name
+        raise BackupFormatError('备份里没有找到条目：%s' % wanted)
+
+    def _att_prefix(self) -> str:
+        """附件目录前缀；找不到 miui_att 时返回空串。"""
+        if self._att_prefix_cache is not None:
+            return self._att_prefix_cache
+        cands = [self._app_root() + 'miui_att/', NOTE_ROOT + 'miui_att/']
+        for name in self._members:
+            idx = name.find('/miui_att/')
+            if idx >= 0:
+                cands.append(name[:idx + len('/miui_att/')])
+        for prefix in cands:
+            if any(n.startswith(prefix) for n in self._members):
+                self._att_prefix_cache = prefix
+                return prefix
+        self._att_prefix_cache = ''
+        return ''
+
+    def _is_meta(self, name: str) -> bool:
+        return (name.endswith('_manifest') or name.endswith('_meta')
+                or name.endswith('_tmp_bak') or '/miui_meta/' in name)
+
     def attachments(self) -> Dict[str, bytes]:
-        """返回 {miui_att 之后的相对路径: 文件内容}。"""
+        """返回 {附件相对路径: 文件内容}。
+
+        正常情况取 `.../miui_att/` 下的条目；若该目录不存在（不同版本），退化为
+        「应用目录下除元数据外的全部条目」。
+        """
+        prefix = self._att_prefix()
         out: Dict[str, bytes] = {}
-        for name, m in self._members.items():
-            if m.isfile() and name.startswith(ATT_PREFIX):
-                out[name[len(ATT_PREFIX):]] = self.read(name)
+        for name in self._members:
+            if prefix:
+                if not name.startswith(prefix):
+                    continue
+                rel = name[len(prefix):]
+            else:
+                if self._is_meta(name):
+                    continue
+                root = self._app_root()
+                rel = name[len(root):] if name.startswith(root) else name
+            out[rel] = self.read(name)
         return out
 
     def read(self, name: str) -> bytes:
@@ -259,52 +371,135 @@ def _decode(b: object) -> str:
     return str(b)
 
 
-def load_notes(backup: MiuiBackup) -> Tuple[List[Note], bytes]:
-    """从 .bak 中读出全部目录与笔记，返回（笔记列表, _tmp_bak 原始字节）。"""
-    raw = backup.read(BAK_ENTRY)
-    root = parse_message(raw)
-    groups: List[Field] = []
+def _submessages(raw: bytes, fields: List[Field]) -> List[Tuple[Field, List[Field]]]:
+    """把 length-delimited 字段解析成子消息；解析失败的（通常是普通字符串）跳过。"""
+    out: List[Tuple[Field, List[Field]]] = []
+    for f in fields:
+        if f.wire != 2 or f.end <= f.start:
+            continue
+        try:
+            inner = parse_message(raw, f.start, f.end)
+        except ValueError:
+            continue
+        if inner:
+            out.append((f, inner))
+    return out
+
+
+def _looks_like_item(inner: List[Field]) -> bool:
+    """Item 的第一字段是 MIME（`vnd.android.cursor.item/...` / `image/png` 等）。"""
+    for f in inner:
+        if f.number == 1 and f.wire == 2:
+            text = _decode(f.value)
+            if 0 < len(text) <= 200 and '/' in text and ' ' not in text:
+                return True
+    return False
+
+
+def _pick_groups(raw: bytes, root: List[Field]) -> List[Field]:
+    """从 Root 里取出「目录 / 笔记记录」列表。
+
+    已知是 #6 包着全部记录；若版本把字段号改了，退化为遍历所有 length-delimited
+    字段、找到确实装着记录（字段号 1 或 2 的子消息）的那一个。
+    """
+    def records_of(field: Field) -> List[Field]:
+        try:
+            inner = parse_message(raw, field.start, field.end)
+        except ValueError:
+            return []
+        return [g for g in inner if g.wire == 2 and g.number in (1, 2)]
+
     for f in root:
         if f.number == 6 and f.wire == 2:
-            groups.extend(g for g in parse_message(raw, f.start, f.end)
-                          if g.number in (1, 2) and g.wire == 2)
+            found = records_of(f)
+            if found:
+                return found
+    for f in root:
+        if f.wire != 2:
+            continue
+        found = records_of(f)
+        if found:
+            return found
+    return [g for g in root if g.wire == 2 and g.number in (1, 2)]
 
-    notes: List[Note] = []
-    for g in groups:
-        fields = parse_message(raw, g.start, g.end)
-        note = Note(note_id='', field_number=g.number,
-                    record_offset=g.start, record_end=g.end)
-        for f in fields:
-            if f.number == 2 and f.wire == 2:
-                note.note_id = _decode(f.value)
-            elif f.number == 5 and f.wire == 0:
-                note.created = int(f.value)
-            elif f.number == 6 and f.wire == 0:
-                note.modified = int(f.value)
-            elif f.number == 8 and f.wire == 2:
-                note.summary = _decode(f.value)
-            elif f.number == 10 and f.wire == 2:
-                note.folder = _decode(f.value)
-            elif f.number == 14 and f.wire == 2:
-                note.title = _decode(f.value)
-            elif f.number == 15 and f.wire == 2:
-                note.kind = _decode(f.value)
-            elif f.number == 9 and f.wire == 2:
-                if note.field_number == 1:
-                    # 目录记录的 #9 是目录名，不是正文条目
-                    note.title = _decode(f.value)
-                    continue
-                item = Item()
-                for f2 in parse_message(raw, f.start, f.end):
-                    item.values[f2.number] = f2.value
-                    if f2.number == 1 and f2.wire == 2:
-                        item.mime = _decode(f2.value)
-                    elif f2.number == 4 and f2.wire == 2:
-                        item.content = f2.value
-                    elif f2.number == 10 and f2.wire == 2:
-                        item.kind = _decode(f2.value)
-                note.items.append(item)
-            elif f.wire == 2:
-                note.extra[f.number] = _decode(f.value)
-        notes.append(note)
+
+_SCALAR_FIELDS = {2, 5, 6, 8, 9, 10, 14, 15}
+
+
+def _parse_record(raw: bytes, group: Field, fields: List[Field]) -> Note:
+    note = Note(note_id='', field_number=group.number,
+                record_offset=group.start, record_end=group.end)
+
+    texts: Dict[int, str] = {}
+    numbers: Dict[int, int] = {}
+    for f in fields:
+        if f.wire == 2:
+            texts.setdefault(f.number, _decode(f.value))
+        elif f.wire == 0:
+            numbers.setdefault(f.number, int(f.value))
+
+    note.created = numbers.get(5, 0)
+    note.modified = numbers.get(6, 0)
+
+    # Item：已知在 #9，但按「内部 #1 是 MIME」识别，字段号漂移也能命中
+    subs = _submessages(raw, fields)
+    item_subs = [(f, inner) for f, inner in subs if _looks_like_item(inner)]
+    if not item_subs:
+        item_subs = [(f, inner) for f, inner in subs if f.number == 9]
+    for _f, inner in item_subs:
+        item = Item()
+        for f2 in inner:
+            item.values[f2.number] = f2.value
+            if f2.number == 1 and f2.wire == 2:
+                item.mime = _decode(f2.value)
+            elif f2.number == 4 and f2.wire == 2:
+                item.content = f2.value
+            elif f2.number == 10 and f2.wire == 2:
+                item.kind = _decode(f2.value)
+        note.items.append(item)
+
+    note.summary = texts.get(8, '')
+    note.folder = texts.get(10, '')
+    note.title = texts.get(14, '')
+    note.kind = texts.get(15, '') or 'common'
+    note.note_id = texts.get(2, '')
+
+    # 目录：没有 item，且 #9（或记录本身就是字段 1）是目录名
+    if not note.items and (group.number == 1 or texts.get(9)):
+        note.field_number = 1
+        if not note.title:
+            note.title = texts.get(9, '')
+    else:
+        note.field_number = 2
+        if not note.note_id:
+            for _num, s in texts.items():
+                if s and len(s) <= 24 and s.isdigit():
+                    note.note_id = s
+                    break
+
+    # 时间戳兜底：记录级缺失时用 item 里的时间
+    if not note.created or not note.modified:
+        for item in note.items:
+            for num in (2, 3):
+                val = item.values.get(num)
+                if isinstance(val, int) and val > 10 ** 12:
+                    if not note.created:
+                        note.created = val
+                    elif not note.modified:
+                        note.modified = val
+    if not note.note_id:
+        note.note_id = 'off-%d' % group.start
+
+    for f in fields:
+        if f.wire == 2 and f.number not in _SCALAR_FIELDS:
+            note.extra[f.number] = _decode(f.value)
+    return note
+
+
+def load_notes(backup: MiuiBackup) -> Tuple[List[Note], bytes]:
+    """从 .bak 中读出全部目录与笔记，返回（笔记列表, _tmp_bak 原始字节）。"""
+    raw = backup.read(backup._find_entry('miui_bak/_tmp_bak'))
+    root = parse_message(raw)
+    groups = _pick_groups(raw, root)
+    notes = [_parse_record(raw, g, parse_message(raw, g.start, g.end)) for g in groups]
     return notes, raw

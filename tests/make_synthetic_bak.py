@@ -43,8 +43,8 @@ def _fbytes(field, value):
     return _tag(field, 2) + _varint(len(value)) + value
 
 
-def _item(mime, content, kind=0):
-    """#9 项：1=mime, 2/3=时间戳占位, 4=正文, 10=kind"""
+def _item(mime, content, kind=0, field=9):
+    """项：1=mime, 2/3=时间戳占位, 4=正文, 10=kind"""
     body = _fbytes(1, mime) + _fvarint(2, 1673258077000) + _fvarint(3, 1673258077000)
     if content:
         body += _fbytes(4, content)
@@ -53,13 +53,14 @@ def _item(mime, content, kind=0):
     return body
 
 
-def _note(note_id, title, folder, created, modified, items, extra=(), kind='common'):
+def _note(note_id, title, folder, created, modified, items, extra=(), kind='common',
+          item_field=9):
     """#2 笔记记录。"""
     body = _fbytes(2, note_id) + _fvarint(3, 0) + _fvarint(4, 0)
     body += _fvarint(5, created) + _fvarint(6, modified) + _fvarint(7, 0)
     body += _fbytes(8, title)          # 摘要（此处与标题相同）
     for it in items:
-        body += _fbytes(9, it)
+        body += _fbytes(item_field, it)
     if folder:
         body += _fbytes(10, folder)
     body += _fbytes(14, title)
@@ -76,11 +77,20 @@ def _folder(name, folder_id):
     return body
 
 
-def build_records(title_suffix=''):
-    """返回顶层 #6 的内容：2 个目录 + 4 篇笔记。
+def _layout(variant=''):
+    """不同版本可能用的字段号。alt 用来模拟「容器字段换成 #7、item 换成 #11」。"""
+    if variant == 'alt':
+        return {'container': 7, 'note': 2, 'item': 11}
+    return {'container': 6, 'note': 2, 'item': 9}
+
+
+def build_records(title_suffix='', variant=''):
+    """返回顶层容器的内容：2 个目录 + 4 篇笔记。
 
     传入 title_suffix 可以让目录名与笔记标题整体变一个样，用来模拟「笔记被编辑过」。
+    variant='alt' 时换一套字段号，用来验证解析器对版本差异的兼容性。
     """
+    lay = _layout(variant)
     folder = '测试目录' + title_suffix
     att_a = 'a' * 39 + '1'          # 含 a-f，满足 40hex 约束
     att_b = 'b' * 39 + '2'
@@ -89,46 +99,54 @@ def build_records(title_suffix=''):
     out += _tag(1, 2) + _varint(len(_folder(folder, '1'))) + _folder(folder, '1')
     out += _tag(1, 2) + _varint(len(_folder('空目录', '2'))) + _folder('空目录', '2')
 
+    def note_field(body):
+        return _tag(lay['note'], 2) + _varint(len(body)) + body
+
     # 1) 纯文本 + 粗体斜体 + 待办
-    text = ('<text indent="0">第一段<b>加粗</b>与<i>斜体</i></text>'
+    text = ('<text indent="0">第一段<b>加粗</b>与<i>斜体</i><u>下划线</u></text>'
             '<text indent="1">缩进一段<br>换行后</text>'
             '<input type="checkbox" indent="1" level="3" checked="true" />')
-    out += _tag(2, 2) + _varint(len(_note('1', '文本笔记' + title_suffix, folder,
-                                          1700000000000, 1700000001000,
-                                          [_item('vnd.android.cursor.item/text_note', text)]))) + \
-        _note('1', '文本笔记' + title_suffix, folder, 1700000000000, 1700000001000,
-              [_item('vnd.android.cursor.item/text_note', text)])
+    out += note_field(_note('1', '文本笔记' + title_suffix, folder,
+                            1700000000000, 1700000001000,
+                            [_item('vnd.android.cursor.item/text_note', text,
+                                   field=lay['item'])], item_field=lay['item']))
 
     # 2) 图片紧跟块级标签（历史死循环的边界）
     img_body = ('<text indent="0">看图</text>\u263a %s<0/></>'
                 '<input type="checkbox" indent="1" checked="true" />'
                 '<text indent="1">尾段</text>') % att_a
-    out += _tag(2, 2) + _varint(len(_note('2', '图片笔记', folder, 1700000002000, 1700000003000,
-                                          [_item('vnd.android.cursor.item/text_note', img_body)]))) + \
-        _note('2', '图片笔记', folder, 1700000002000, 1700000003000,
-              [_item('vnd.android.cursor.item/text_note', img_body)])
+    out += note_field(_note('2', '图片笔记', folder, 1700000002000, 1700000003000,
+                            [_item('vnd.android.cursor.item/text_note', img_body,
+                                   field=lay['item'])], item_field=lay['item']))
 
     # 3) 无目录、无标题（应回退到摘要/未命名笔记）
     blank = _note('3', '', '', 1700000004000, 1700000005000,
-                  [_item('vnd.android.cursor.item/text_note', '<text indent="1"></text>')])
-    out += _tag(2, 2) + _varint(len(blank)) + blank
+                  [_item('vnd.android.cursor.item/text_note', '<text indent="1"></text>',
+                         field=lay['item'])], item_field=lay['item'])
+    out += note_field(blank)
 
     # 4) 手写笔记：text_note + ent/file(笔迹) + ent/file(识别) + image/jpeg(缩略图)
     #    与真实备份一致：缩略图项的内容就是附件名（40 位 hash）。
     hand = _note('4', '手写笔记', '', 1700000006000, 1700000007000, [
-        _item('vnd.android.cursor.item/text_note', '<text indent="0"></text>'),
-        _item('ent/file', att_b + '.ent', kind=1),
-        _item('ent/file', att_c, kind=1),
-        _item('image/jpeg', THUMB),
-    ], kind='handwrite')
-    out += _tag(2, 2) + _varint(len(hand)) + hand
+        _item('vnd.android.cursor.item/text_note', '<text indent="0"></text>',
+              field=lay['item']),
+        _item('ent/file', att_b + '.ent', kind=1, field=lay['item']),
+        _item('ent/file', att_c, kind=1, field=lay['item']),
+        _item('image/jpeg', THUMB, field=lay['item']),
+    ], kind='handwrite', item_field=lay['item'])
+    out += note_field(hand)
     return out
 
 
-def build_bak(path, title_suffix=''):
-    """写出一个合成的 .bak（MIUI BACKUP 头 + tar）。"""
-    records = build_records(title_suffix)
-    top = _tag(6, 2) + _varint(len(records)) + records
+def build_bak(path, title_suffix='', variant=''):
+    """写出一个合成的 .bak（MIUI BACKUP 头 + tar）。
+
+    variant='alt' 会同时换掉 pb 字段号、在头部插入多一行、并把 tar 写成 PAX 格式，
+    用来模拟版本差异与时序差异。
+    """
+    lay = _layout(variant)
+    records = build_records(title_suffix, variant)
+    top = _tag(lay['container'], 2) + _varint(len(records)) + records
     tmp_bak = top + _fvarint(7, 1) + _fbytes(8, ' ') + _fbytes(9, '0' * 6)
 
     attached = {
@@ -139,14 +157,36 @@ def build_bak(path, title_suffix=''):
         'apps/com.miui.notes/miui_bak/_tmp_bak': tmp_bak,
     }
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT) as tf:
+    fmt = tarfile.PAX_FORMAT if variant == 'alt' else tarfile.USTAR_FORMAT
+    with tarfile.open(fileobj=buf, mode='w', format=fmt) as tf:
         for name, data in attached.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             info.mtime = 1700000000
             tf.addfile(info, io.BytesIO(data))
-    header = ('MIUI BACKUP\n2\ncom.miui.notes 笔记\n-1\n0\n'
-              'ANDROID BACKUP\n5\n0\nnone\n').encode('utf-8')
+    if variant == 'alt':
+        header = ('MIUI BACKUP\n2\nextra-field\ncom.miui.notes 笔记\n-1\n0\n'
+                  'ANDROID BACKUP\n5\n0\nnone\n').encode('utf-8')
+    else:
+        header = ('MIUI BACKUP\n2\ncom.miui.notes 笔记\n-1\n0\n'
+                  'ANDROID BACKUP\n5\n0\nnone\n').encode('utf-8')
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, 'wb') as f:
+        f.write(header)
+        f.write(buf.getvalue())
+    return path
+
+
+def build_foreign_bak(path, package='com.tencent.mm'):
+    """写出一个「其它应用」的合成备份，用来测试自动挑包。"""
+    body = b'fake-records'
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT) as tf:
+        info = tarfile.TarInfo('apps/%s/fake.bin' % package)
+        info.size = len(body)
+        tf.addfile(info, io.BytesIO(body))
+    header = ('MIUI BACKUP\n2\n%s 别的应用\n-1\n0\n'
+              'ANDROID BACKUP\n5\n0\nnone\n' % package).encode('utf-8')
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, 'wb') as f:
         f.write(header)
