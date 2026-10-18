@@ -333,7 +333,8 @@ class Exporter:
                       file=sys.stderr)
 
         self.rows.append(dict(
-            note_id=note.note_id, folder=note.folder, title=note.display_title,
+            note_id=note.note_id, folder=note.folder,
+            title=export.display_name(note),
             kind=note.kind, created=export.fmt_time(note.created),
             modified=export.fmt_time(note.modified),
             blocks=sum(1 for b in doc.blocks if not isinstance(b, content.ImageBlock)),
@@ -355,7 +356,8 @@ class Exporter:
         """给「这次没重写」的旧笔记生成目录行：格式按磁盘上真实存在的文件来。"""
         base = os.path.join(self.out_root, *rel_dir.replace('\\', '/').split('/'))
         return dict(
-            note_id=note.note_id, folder=note.folder, title=note.display_title,
+            note_id=note.note_id, folder=note.folder,
+            title=export.display_name(note),
             kind=note.kind, created=export.fmt_time(note.created),
             modified=export.fmt_time(note.modified), blocks=0, images=0, attachments=0,
             md='note.md' if os.path.isfile(os.path.join(base, 'note.md')) else '',

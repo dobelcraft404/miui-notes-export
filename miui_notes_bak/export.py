@@ -19,23 +19,45 @@ from .bakfile import Note
 
 FOLDER_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 MAX_NAME = 80
+MAX_TITLE = 120
+
+
+_TAG_RE = re.compile(r'<[^>]*>')
+_IMAGE_MARK_RE = re.compile(r'\u263a\s*[0-9a-f]{40}(?:\s*<0\s*/>)?')
+_WS_RE = re.compile(r'\s+')
+
+
+def plain_text(text: str) -> str:
+    """把标题/摘要里的富文本标记与行内图片引用剥掉，只留可读文字。
+
+    摘要字段（记录 `#8`）和标题字段都可能原样带着 `<text indent="1">`、`<b>`
+    这类标记，甚至整段就是一张图片的引用 `☺ <40位hash><0/></>`。
+    目录页（index.html / index.csv）直接展示这些字段，不剥就会把标记当正文显示。
+    """
+    text = _IMAGE_MARK_RE.sub(' ', text or '')
+    text = _TAG_RE.sub(' ', text)
+    text = text.replace('\u200b', '')
+    return _WS_RE.sub(' ', text).strip()
+
+
+def _clip(text: str, limit: int) -> str:
+    """超长文本截断并加省略号。无标题笔记的「标题」会回退成摘要，
+    而摘要可能直接是整段正文，不截断会让目录页出现上千字的一行。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip(' .,;:，。；：') + '…'
 
 
 def display_name(note) -> str:
-    """笔记的目录名：优先标题，其次摘要首行，最后退化为“未命名笔记”。
+    """笔记的目录名与展示标题：优先标题，其次摘要首行，最后退化为“未命名笔记”。
 
     摘要可能带富文本标记或直接就是一张图片的引用，必须先把标记剥掉，
     否则会生成 `☺ <hash>...` 这类无意义的目录名。
     """
     for cand in (note.title, note.summary):
-        cand = (cand or '').strip()
-        if not cand:
-            continue
-        cand = re.sub(r'<[^>]*>', ' ', cand)
-        cand = re.sub(r'\u263a\s*[0-9a-f]{40}', ' ', cand)
-        cand = re.sub(r'\s+', ' ', cand).strip()
+        cand = plain_text(cand)
         if cand:
-            return cand
+            return _clip(cand, MAX_TITLE)
     return '未命名笔记'
 
 

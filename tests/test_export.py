@@ -172,6 +172,7 @@ def main() -> int:
     html_img = 0
     html_broken = []
     src_re = re.compile(r'(?:src|href)="([^"]+)"')
+    index_title_re = re.compile(r'class="title">([^<]*)<')
     for p in html_files:
         raw = open(p, encoding='utf-8').read()
         if not raw.lstrip().lower().startswith('<!doctype html>'):
@@ -203,6 +204,17 @@ def main() -> int:
           'index.html 的 %d 个链接全部有效' % len(index_links))
     for v in index_missing[:5]:
         print('     index.html -> %s' % v)
+
+    # 目录页的标题取自笔记的标题或摘要，而摘要可能原样带着富文本标记
+    # （`<text indent="1">`、行内图片引用 `☺ <hash><0/></>`），也可能是整段正文。
+    index_titles = [t for t in index_title_re.findall(index_raw)]
+    dirty = [t for t in index_titles if '<' in t or '\u263a' in t]
+    long_titles = [t for t in index_titles if len(t) > 121]
+    check(not dirty, 'index.html 的 %d 个标题都不含富文本标记' % len(index_titles))
+    for t in dirty[:3]:
+        print('     含标记：%r' % t[:60])
+    check(not long_titles, 'index.html 的标题都已截断（最长 %d 字符）'
+          % (max([len(t) for t in index_titles] or [0])))
 
     print('\n== 5. Word 内嵌图片 ==')
     media_count = 0

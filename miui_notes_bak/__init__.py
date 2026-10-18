@@ -9,4 +9,4 @@
 from .bakfile import MiuiBackup, Note, load_notes          # noqa: F401
 from .manifest import Manifest, content_fingerprint        # noqa: F401
 
-__version__ = '1.2.0'
+__version__ = '1.2.1'

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miui-notes-export"
-version = "1.2.0"
+version = "1.2.1"
 description = "离线解析小米澎湃OS / MIUI 笔记备份包（.bak），导出为 Markdown / Word / HTML，图片等附件一并保留"
 readme = "README.md"
 requires-python = ">=3.9"
