@@ -1,5 +1,8 @@
 # MIUI 笔记备份导出工具
 
+[![CI](https://github.com/dobelcraft404/miui-notes-export/actions/workflows/ci.yml/badge.svg)](https://github.com/dobelcraft404/miui-notes-export/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 把**小米澎湃OS / MIUI 的「本地备份」里的笔记包（`.bak`）离线解析**，导出成 Markdown、Word（`.docx`）和 HTML，图片等附件一并保留，输出目录结构与备份包保持一致。
 
 全程本地离线解析，不需要登录小米账号、不联网、不上传任何数据。
