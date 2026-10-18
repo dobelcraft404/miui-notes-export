@@ -15,6 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ['3.9', '3.11', '3.13']
+    # Windows 的默认控制台不是 UTF-8，脚本里有中文输出，统一让 Python 用 UTF-8。
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +46,9 @@ jobs:
 
       - name: 合并去重测试
         run: python tests/test_manifest.py
+
+      - name: 诊断测试（报告不含正文）
+        run: python tests/test_diagnose.py
 
       - name: 真实备份端到端测试（没有备份时自动跳过）
         run: python tests/test_export.py

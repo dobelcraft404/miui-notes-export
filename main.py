@@ -345,6 +345,12 @@ def _selftest() -> int:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Windows 控制台默认不是 UTF-8，--selftest 打印中文会崩，兜底一下。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     if '--selftest' in argv:
         return _selftest()
     factory = build_app()

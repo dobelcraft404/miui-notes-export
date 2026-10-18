@@ -649,7 +649,18 @@ def parse_formats(value: str) -> List[str]:
     return out
 
 
+def _ensure_utf8_stdout() -> None:
+    """Windows 控制台（尤其英文系统）默认不是 UTF-8，print 中文会抛
+    UnicodeEncodeError: 'charmap' codec can't encode。这里兜底，失败就忽略。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8')  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    _ensure_utf8_stdout()
     args = build_parser().parse_args(argv)
     formats = parse_formats(args.format)
     source = os.path.abspath(args.source)

@@ -6,7 +6,16 @@
 """
 import io
 import os
+import sys
 import tarfile
+
+# Windows 控制台（尤其英文系统）默认不是 UTF-8，直接 print 中文会抛
+# UnicodeEncodeError: 'charmap' codec can't encode。这里兜底，失败就忽略。
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 # ---- 合成用的附件内容 -------------------------------------------------------
 PNG = bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489'
