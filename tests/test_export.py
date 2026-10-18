@@ -215,6 +215,7 @@ def main() -> int:
         print('     含标记：%r' % t[:60])
     check(not long_titles, 'index.html 的标题都已截断（最长 %d 字符）'
           % (max([len(t) for t in index_titles] or [0])))
+    check('overflow-wrap: anywhere' in index_raw, '目录页样式对超长串自动换行')
 
     print('\n== 5. Word 内嵌图片 ==')
     media_count = 0

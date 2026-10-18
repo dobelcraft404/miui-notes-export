@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -126,6 +127,14 @@ def main() -> int:
         check(len({e.path for e in mf6.entries}) == 4, '重建后没有重复目录')
         check(all(e.content_key for e in mf6.entries), '重建后的记录都带内容指纹')
         check(all(' (2)' not in e.path for e in mf6.entries), '登记的目录名都不带「(2)」')
+        # 重建目录页走的是另一条代码路径（直接用 manifest 的记录），
+        # 标题同样要先剥掉富文本标记，否则重新建索引会把脏标题写回去。
+        index_html = open(os.path.join(out, 'index.html'), encoding='utf-8').read()
+        titles6 = re.findall(r'class="title">([^<]*)<', index_html)
+        check(len(titles6) == 4, '重建的目录页仍有 4 个条目（实际 %d）' % len(titles6))
+        check(not [t for t in titles6 if '<' in t or '\u263a' in t],
+              '重建的目录页标题不含富文本标记')
+        check('overflow-wrap: anywhere' in index_html, '目录页样式含长串自动换行')
 
         print('== 7. 清单被删 + 备份里改了标题：仍按 note.md 正文认领旧目录 ==')
         out7 = os.path.join(tmp, 'out7')

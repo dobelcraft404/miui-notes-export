@@ -509,6 +509,17 @@ def _match_by_content(note, doc: content.NoteDocument, out_root: str,
     return None
 
 
+def _existing_format_files(base: str) -> List[str]:
+    """磁盘上真实存在的格式文件。
+
+    不能按 `formats` 猜：`--rebuild-index` 经常是单独跑的（只关心目录页），
+    这时命令行的格式参数（默认 md+docx）会把已经导出的 note.html 从
+    目录页的链接里漏掉。
+    """
+    return [name for name in FORMAT_FILE.values()
+            if os.path.isfile(os.path.join(base, name))]
+
+
 def rebuild_manifest(bak_path: str, out_root: str, formats: Sequence[str]) -> dict:
     """给「没有清单的老导出目录」补一份清单和目录页。
 
@@ -558,16 +569,14 @@ def rebuild_manifest(bak_path: str, out_root: str, formats: Sequence[str]) -> di
             stat['skipped_existing'] += 1
 
         base = os.path.join(out_root, *rel_dir.split('/'))
-        files = [FORMAT_FILE[f] for f in formats
-                 if os.path.isfile(os.path.join(base, FORMAT_FILE[f]))]
-        if not os.path.isdir(base) or ('md' in formats and 'note.md' not in files):
+        files = _existing_format_files(base)
+        if not os.path.isdir(base) or 'note.md' not in files:
             # 备份里改了标题/目录名，磁盘上还是旧目录名：按 note.md 正文认领它
             hit = _match_by_content(note, doc, out_root, claimed)
             if hit is not None:
                 rel_dir = hit
                 base = os.path.join(out_root, *rel_dir.split('/'))
-                files = [FORMAT_FILE[f] for f in formats
-                         if os.path.isfile(os.path.join(base, FORMAT_FILE[f]))]
+                files = _existing_format_files(base)
                 stat['renamed'] = stat.get('renamed', 0) + 1
         claimed.add(rel_dir)
         if not files:
@@ -578,7 +587,7 @@ def rebuild_manifest(bak_path: str, out_root: str, formats: Sequence[str]) -> di
         mf.record(note, content_key, rel_dir, files, assets, fingerprint)
         stat['entries'] += 1
         rows.append(dict(
-            note_id=note.note_id, folder=note.folder, title=note.display_title,
+            note_id=note.note_id, folder=note.folder, title=export.display_name(note),
             kind=note.kind, created=export.fmt_time(note.created),
             modified=export.fmt_time(note.modified),
             blocks=sum(1 for b in doc.blocks if not isinstance(b, content.ImageBlock)),

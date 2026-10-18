@@ -272,6 +272,8 @@ body {
   margin: 0; padding: 2rem 1rem 4rem;
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
   font-size: 15px; line-height: 1.75; color: #24292f; background: #f6f8fa;
+  /* 正文和标题里可能出现一长串没有空格的数字 / hash，默认不换行会撑破卡片 */
+  overflow-wrap: anywhere; word-break: break-word;
 }
 .page { max-width: 46rem; margin: 0 auto; background: #fff; border-radius: 10px;
         padding: 2rem 2.25rem 2.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
@@ -429,7 +431,10 @@ def write_index_html(path: str, rows: Sequence[dict],
         links = []
         base = row['path'].replace('\\', '/') if row.get('path') else ''
         if base:
-            for fmt in formats:
+            # 按行里实际存在的格式出链接，而不是按命令行要求的格式：
+            # `--rebuild-index` 常单独跑（默认只要求 md+docx），
+            # 若照 formats 输出就会把已导出的 note.html 从目录页漏掉。
+            for fmt in ('md', 'docx', 'html'):
                 if row.get(fmt):
                     links.append('<a href="%s/%s">%s</a>'
                                  % (_esc(base), _esc(row[fmt]), fmt.upper()))
