@@ -57,6 +57,13 @@ python -m pip install -r requirements.txt
 - HTML 只需要标准库。
 - 装了 `python-docx` 与否都不影响启动：同时勾了 Markdown / Word 而机器上没装 `python-docx` 时，会打印一行提示后**跳过 Word**、其余格式照常导出；只勾 Word 才会报错让你装依赖。
 
+也可以装成一个命令（可选；装了之后在任何目录都能用 `miui-notes-export`）：
+
+```powershell
+python -m pip install .
+miui-notes-export "小米备份.zip" -o .\dist -f all
+```
+
 ## 使用
 
 ### 图形界面（推荐）
@@ -104,6 +111,12 @@ python -m miui_notes_bak "小米备份.zip" -o .\dist --rebuild-index
 
 # 额外把附件原样再存一份，并列出没被任何笔记引用的附件
 python -m miui_notes_bak "小米备份.zip" -o .\dist --keep-raw --copy-unreferenced
+
+# 换设备后导出不对 / 干脆报错：先体检备份包结构（报告不含笔记正文，可以直接贴出去求助）
+python -m miui_notes_bak "小米备份.zip" --diagnose
+
+# 看版本
+python -m miui_notes_bak --version
 ```
 
 参数一览：
@@ -115,6 +128,8 @@ python -m miui_notes_bak "小米备份.zip" -o .\dist --keep-raw --copy-unrefere
 | `-f, --format` | `md` / `docx` / `html` / `both`(=md+docx，默认) / `all`(三种都要)；也可用逗号组合，如 `md,html` |
 | `--merge` / `--no-merge` | 是否与输出目录里已有的笔记合并（默认 `--merge`） |
 | `--rebuild-index` | 只重建清单与目录页，不重新导出笔记 |
+| `--diagnose` | 只体检备份包结构并输出诊断报告（不含笔记正文），换设备后排查用 |
+| `--version` | 打印版本号 |
 | `--keep-raw` | 另存一份原始附件到 `raw_attachments/` |
 | `--copy-unreferenced` | 把没被引用到的附件放进 `raw_attachments/unreferenced/` |
 | `--workdir` | 解压 zip 的临时目录 |
@@ -201,6 +216,26 @@ with MiuiBackup(r'.\备份\笔记(com.miui.notes).bak') as bak:
 `export.py` 里的三个渲染函数都以同一份块列表（`content.NoteDocument`）为输入：
 `note_markdown()` / `note_html()` / `note_docx()`，另外 `write_index_html()` 生成目录页。
 
+## 项目结构
+
+分层很清楚，每一层只依赖下一层，换格式或换输出都只动一处：
+
+| 文件 | 职责 |
+| --- | --- |
+| `miui_notes_bak/bakfile.py` | 容器层：`.bak` 文本头、tar 定位与读取、`_tmp_bak` 的 protobuf 解析成 `Note` |
+| `miui_notes_bak/content.py` | 正文层：`<text>` / `<input>` / `<b>` / 图片标记等自定义标记 → 块模型 |
+| `miui_notes_bak/attachments.py` | 附件层：把正文里的附件引用映射到真实附件（SHA1 命名 + 相对路径） |
+| `miui_notes_bak/media.py` | 附件类型识别（按魔数补扩展名）、文件名清洗 |
+| `miui_notes_bak/export.py` | 输出层：Markdown / HTML / Word 三种渲染 + 目录页 |
+| `miui_notes_bak/manifest.py` | 去重层：内容指纹、导出清单、目录分配、按正文认领旧目录 |
+| `miui_notes_bak/diagnose.py` | 诊断层：只输出结构统计、不碰正文的体检报告 |
+| `miui_notes_bak/cli.py` | 入口层：命令行参数、输入准备（zip / 目录 / 单个 `.bak`）、导出编排 |
+| `main.py` | tkinter 图形界面（导出跑在后台线程，失败弹错误框而不是静默卡住） |
+| `启动.bat` | Windows 双击启动（GBK + CRLF 编码，原因见「使用」一节） |
+| `tools/` | 针对导出结果的自检脚本（纯标准库，不需要浏览器） |
+| `tests/` | 测试与合成备份生成器（不含任何真实数据） |
+| `技术细节.md` | 格式逆向的完整记录：容器布局、protobuf 字段表、附件关联、踩过的坑 |
+
 ## 自检
 
 ```powershell
@@ -213,11 +248,14 @@ python tests\test_manifest.py
 # 兼容性（纯合成数据，秒级）：字段号变体 / 头部变体 / 多应用备份包 / 加密备份 / 缺 python-docx
 python tests\test_compat.py
 
+# 诊断报告（纯合成数据，秒级）：确认报告不含正文、对各种变体都能出结果
+python tests\test_diagnose.py
+
 # 真实备份上的端到端断言（只读备份，输出到临时目录，跑完删除；不打印任何笔记正文）
 python tests\test_export.py "小米备份.zip"
 ```
 
-`test_export.py` 覆盖：容器与 protobuf 解析、正文标记剥离、附件类型识别、全量导出篇数、Markdown 图片链接有效性、HTML 结构与引用完整性、Word 可打开且内嵌图片数与 Markdown 一致、`index.html` 链接有效。`test_manifest.py` 覆盖合并去重的全部语义，`test_compat.py` 覆盖格式变体与容错（全部用合成数据，不需要真实备份）。四个脚本退出码 0 表示全部通过。
+`test_export.py` 覆盖：容器与 protobuf 解析、正文标记剥离、附件类型识别、全量导出篇数、Markdown 图片链接有效性、HTML 结构与引用完整性、Word 可打开且内嵌图片数与 Markdown 一致、`index.html` 链接有效。`test_manifest.py` 覆盖合并去重的全部语义，`test_compat.py` 覆盖格式变体与容错，`test_diagnose.py` 覆盖诊断报告（后三个全部用合成数据，不需要真实备份）。五个脚本退出码 0 表示全部通过。
 
 > `test_export.py` 只断言「结构不变量」（各种格式的篇数互相对得上、链接都有效、图片数三处一致），**不写死任何一份备份的具体数字**，所以换一台手机、换一份备份也能用。没有提供备份时它会打印「跳过」并返回 0，不会让整个测试套件变红。
 
@@ -244,6 +282,29 @@ python -m miui_notes_bak tests\synthetic.bak -o .\dist-synthetic
 
 仓库里的 `demo-html/` 就是用上面这份合成数据生成的示例（完全不含真实笔记），双击 `demo-html\index.html` 可以直接看到导出效果。
 
+## 隐私与安全
+
+这个工具处理的是一份**完整的个人笔记备份**，值得把边界说清楚。详见 [`SECURITY.md`](SECURITY.md)。
+
+**它不会做的事**
+
+- 不联网：解析与导出全程只有本地文件读写，没有任何网络请求。
+- 不读账号：不需要登录小米账号，也不访问 `i.mi.com`。
+- 不改原始备份：对 `.bak` / `.zip` 只读；唯一会写的地方是你的输出目录，以及解 zip 时用的系统临时目录（`%TEMP%\miui-notes-xxxx`，跑完即删）。
+
+**它会写出这些文件**
+
+- `note.md` / `note.html` / `note.docx` 和 `note.assets/` 里的附件——**全都是明文**，包括图片、手写识别结果、通话笔记里的内容。导到哪，哪里就有一份完整副本。
+- `export-manifest.json` 记录了每篇笔记的落点，并且带**本机绝对路径**。
+- `--keep-raw` 会再把原始附件整个释放一份。
+
+**几条建议**
+
+1. 导出目录别放在共享盘或同步盘的公共位置；敏感笔记建议放在加密盘（如 VeraCrypt）里。
+2. 分享截图或打包给别人之前，先清掉 `note.assets/`、`export-manifest.json` 和正文里不打算公开的部分。
+3. **不要**把导出结果提交进 Git。仓库的 `.gitignore` 已经排除了 `dist/`、`导出结果/`、`_work/`、`*.bak`、`*.zip`。
+4. 遇到问题要发出来求助时，优先用 `--diagnose`：它的输出只有结构统计（包名、记录数、字段号、附件类型分布），**不含任何正文、标题和附件内容**，可以直接贴。
+
 ## 常见问题
 
 **导出的 Word 里没有图片？**
@@ -256,7 +317,16 @@ python -m miui_notes_bak tests\synthetic.bak -o .\dist-synthetic
 不能。`_tmp_bak` 的 protobuf 结构是「笔记」这个应用自己的，本工具只针对 `com.miui.notes`。
 
 **数据安全？**
-解析与导出全在本机完成，不发起任何网络请求，不修改原始备份文件。
+解析与导出全在本机完成，不发起任何网络请求，不修改原始备份文件。会写出哪些明文、怎么处理更稳妥，见上面的「隐私与安全」。
+
+**换了一台手机 / 升了系统，导出不对或直接报错？**
+先跑一遍体检：
+
+```powershell
+python -m miui_notes_bak "小米备份.zip" --diagnose
+```
+
+报告里有文本头行数、tar 起点、记录数、顶层字段号、记录字段号、附件类型分布和解析错误，**不含任何笔记正文**，可以直接贴出来。最常见的情况是记录的字段号变了——报告里「未识别的字段号」那行会直接显示出来；GUI 报错时也会提示你先跑这个。
 
 ## 关于 AI 辅助
 
@@ -266,6 +336,10 @@ python -m miui_notes_bak tests\synthetic.bak -o .\dist-synthetic
 - **代码与文档**：`miui_notes_bak/`、`main.py`、`tools/`、`tests/`、`README.md`、`技术细节.md` 主要由 AI 编程助手（DeepSeek 模型）生成与迭代。
 - **格式逆向**：`.bak` 的文本头与 tar 布局、`_tmp_bak` 的 protobuf 字段、附件按 SHA1 命名、手写与多页手写的关联方式，全部是从一份澎湃OS3（`OS3.0.305.0.WNMCNXM`，笔记 `2.4.0.9`）的真实备份包里逐字节实测出来的。这个格式没有公开文档。
 - **验证方式**：每个结论都在真实备份或合成数据上跑过。开发中发现的死循环（行内图片紧跟块级标签）、三个同名 `multi_page_ent.ent` 被误匹配到同一份、测试提前删除 zip 临时目录等问题，都有可复现的用例，不是推测。
-- **局限**：没有经过第三方代码审计，也没有 CI；只在一份设备、一个系统版本的备份上验证过。换机型或系统版本可能需要微调。
+- **局限**：没有经过第三方代码审计；CI（GitHub Actions，Linux / Windows × Python 3.9 / 3.11 / 3.13）跑的只有合成数据和格式变体，真实备份上的结论仍然只来自一份设备、一个系统版本。换机型或系统版本可能需要微调。
 
 如果你要把它用在重要数据上，建议先用 `--keep-raw` 导一份原始附件，再和 `note.assets/` 对一遍。
+
+## 许可证
+
+MIT License，见 [`LICENSE`](LICENSE)。

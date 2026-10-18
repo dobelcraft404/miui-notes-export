@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 测试（${{ matrix.os }} / Python ${{ matrix.python-version }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.9', '3.11', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install python-docx
+
+      - name: 语法检查
+        run: python -m compileall -q miui_notes_bak tests tools main.py
+
+      - name: 生成合成备份（仓库里不带 .bak 文件）
+        run: python tests/make_synthetic_bak.py
+
+      - name: 正文解析测试
+        run: python tests/test_parse_content.py
+
+      - name: 兼容性测试
+        run: python tests/test_compat.py
+
+      - name: 合并去重测试
+        run: python tests/test_manifest.py
+
+      - name: 真实备份端到端测试（没有备份时自动跳过）
+        run: python tests/test_export.py
+
+      - name: 冒烟导出（三种格式）
+        run: python -m miui_notes_bak tests/synthetic.bak -o out-smoke -f all
+
+      - name: 校验导出的 HTML 结构
+        run: python tools/html_check.py out-smoke
+
+      - name: 校验资产引用完整性
+        run: python tools/verify_export.py out-smoke
+
+      - name: 诊断模式自检
+        run: python -m miui_notes_bak tests/synthetic.bak --diagnose
+
+      - name: 版本参数
+        run: python -m miui_notes_bak --version

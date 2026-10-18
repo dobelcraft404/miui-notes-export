@@ -13,11 +13,15 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from miui_notes_bak import __version__ as VERSION
     from miui_notes_bak import attachments as att_mod
-    from miui_notes_bak import bakfile, content, export, manifest, media
+    from miui_notes_bak import bakfile, content, diagnose as diagnose_mod
+    from miui_notes_bak import export, manifest, media
 else:
+    from . import __version__ as VERSION
     from . import attachments as att_mod
-    from . import bakfile, content, export, manifest, media
+    from . import bakfile, content, diagnose as diagnose_mod
+    from . import export, manifest, media
 
 BAK_SUFFIX = '.bak'
 ASSET_DIRNAME = 'note.assets'
@@ -616,6 +620,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help='关闭合并，输出目录里已经有的同样内容也重新写一份')
     p.add_argument('--rebuild-index', action='store_true',
                    help='只给输出目录重建清单（export-manifest.json）和目录页，不重新导出笔记')
+    p.add_argument('--diagnose', action='store_true',
+                   help='只体检备份包结构并输出诊断报告（不含笔记正文），用于换设备后排查')
+    p.add_argument('--version', action='version', version='%(prog)s ' + VERSION)
     return p
 
 
@@ -650,10 +657,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print('找不到输入：%s' % source, file=sys.stderr)
         return 2
     out_root = os.path.abspath(args.out)
-    print('输入：%s' % source)
-    print('输出：%s' % out_root)
+    if not args.diagnose:
+        print('输入：%s' % source)
+        print('输出：%s' % out_root)
     bak_path, cleanup = prepare_input(source, args.workdir)
     try:
+        if args.diagnose:
+            report = diagnose_mod.diagnose(bak_path)
+            diagnose_mod.print_report(report)
+            ok = not report.get('errors')
+            return 0 if ok else 1
         if args.rebuild_index:
             stat = rebuild_manifest(bak_path, out_root, formats)
         else:

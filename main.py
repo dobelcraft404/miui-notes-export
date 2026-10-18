@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -242,11 +243,17 @@ def build_app():
                     self._say(line)
                 self._say('用时 %.1f 秒' % (time.time() - started))
                 self.queue.put(('done', out))
-            except Exception:
+            except SystemExit as exc:
+                # cli 用 SystemExit 抛「人话」错误（加密备份、没有笔记包、缺 python-docx 等），
+                # 不能让它悄悄结束线程，否则界面会一直停在“导出中”。
+                msg = str(exc) or '程序提前退出'
+                self._say('停止：%s' % msg)
+                self.queue.put(('fail', msg))
+            except Exception as exc:
                 self._say('出错了：')
                 for line in traceback.format_exc().splitlines():
                     self._say('  ' + line)
-                self.queue.put(('fail', None))
+                self.queue.put(('fail', '%s: %s' % (type(exc).__name__, exc)))
 
         def _drain(self):
             try:
@@ -258,12 +265,12 @@ def build_app():
                     elif kind == 'done':
                         self._finish(payload, ok=True)
                     else:
-                        self._finish(None, ok=False)
+                        self._finish(None, ok=False, detail=payload or '')
             except queue.Empty:
                 pass
             self.after(120, self._drain)
 
-        def _finish(self, out, ok):
+        def _finish(self, out, ok, detail=''):
             self.btn_run.configure(state='normal')
             self.var_status.set('完成' if ok else '失败')
             if ok:
@@ -272,6 +279,15 @@ def build_app():
                     self.btn_index.configure(state='normal')
                 if messagebox.askyesno('导出完成', '导出完成。要打开目录看看吗？'):
                     self._open_out()
+            else:
+                text = (detail or '未知错误').strip()
+                if len(text) > 600:
+                    text = text[:600] + '…'
+                messagebox.showerror(
+                    '导出失败',
+                    '导出没有完成。\n\n%s\n\n详细的错误堆栈在下面的日志里。\n'
+                    '如果是第一次在这个设备上用，可以把命令行加 --diagnose 跑一遍，'
+                    '把输出的诊断报告贴出来（报告不含笔记内容）。' % text)
 
         def _open_out(self):
             out = self.var_out.get().strip().strip('"')
@@ -301,6 +317,28 @@ def _selftest() -> int:
     print('窗口构造成功：标题=%r 尺寸=%s 格式勾选=%s 合并默认=%s'
           % (app.title(), app.geometry(), [k for k, v in app.formats.items() if v.get()],
              app.var_merge.get()))
+
+    # 失败路径自检：导出出错时必须把错误放进队列（界面据此弹窗），
+    # 而不是让后台线程悄悄死掉、界面一直停在「导出中…」。
+    bad = os.path.join(HERE, '__selftest_no_such_backup__.zip')
+    out = os.path.join(tempfile.gettempdir(), 'miui-notes-selftest-out')
+    try:
+        app._work(bad, out, ['md'], True, False)
+    except BaseException as exc:                    # noqa: BLE001
+        print('失败：导出失败时把异常抛了出来：%r' % (exc,))
+        app.destroy()
+        return 1
+    kinds = []
+    while True:
+        try:
+            kinds.append(app.queue.get_nowait()[0])
+        except queue.Empty:
+            break
+    if 'fail' not in kinds:
+        print('失败：导出失败时没有把错误送进队列（队列里只有 %s）' % (kinds,))
+        app.destroy()
+        return 1
+    print('失败路径：已捕获并进入队列（%d 条消息）' % len(kinds))
     app.destroy()
     return 0
 

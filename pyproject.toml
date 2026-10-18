@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "miui-notes-export"
+version = "1.2.0"
+description = "离线解析小米澎湃OS / MIUI 笔记备份包（.bak），导出为 Markdown / Word / HTML，图片等附件一并保留"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "dobelcraft404" }]
+keywords = ["miui", "hyperos", "xiaomi", "notes", "backup", "markdown", "docx", "export"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+docx = ["python-docx>=1.0"]
+
+[project.scripts]
+miui-notes-export = "miui_notes_bak.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dobelcraft404/miui-notes-export"
+Repository = "https://github.com/dobelcraft404/miui-notes-export"
+
+[tool.setuptools]
+packages = ["miui_notes_bak"]

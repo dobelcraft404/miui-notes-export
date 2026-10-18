@@ -173,6 +173,10 @@ class MiuiBackup:
     def names(self) -> List[str]:
         return list(self._members)
 
+    def member_sizes(self) -> Dict[str, int]:
+        """{条目名: 解出的字节数}，用于诊断报告。"""
+        return {name: m.size for name, m in self._members.items()}
+
     def _find_entry(self, wanted: str) -> str:
         """定位 _tmp_bak 之类的关键条目，允许包名/目录名变化。"""
         for cand in (self._app_root() + wanted, NOTE_ROOT + wanted):
